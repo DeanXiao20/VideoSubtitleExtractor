@@ -1,0 +1,6 @@
+yt-dlp>=2024.1.0
+faster-whisper>=1.0.0
+deep-translator>=1.11.0
+eng-to-ipa>=0.0.2
+pysrt>=1.1.0
+streamlit>=1.30.0

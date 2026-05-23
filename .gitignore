@@ -1,0 +1,29 @@
+# Runtime data (models, downloads, output, cache, database)
+data/models/
+data/downloads/
+data/output/
+data/app.db
+data/settings.json
+data/word_cache.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Environment
+.env
+
+# Playwright MCP temp files
+.playwright-mcp/
