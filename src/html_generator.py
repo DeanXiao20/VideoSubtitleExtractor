@@ -168,15 +168,6 @@ body {
     margin-top: 2px;
 }
 
-.content-grid {
-    display: grid;
-    grid-template-columns: 1fr 26%;
-    gap: 0 10px;
-}
-
-.subtitle-column {
-    min-width: 0;
-}
 
 .segment {
     margin-bottom: 5px;
@@ -207,30 +198,6 @@ body {
     line-height: 1.4;
     margin: 0 0 0 8px;
     color: #666;
-}
-
-.notes-column {
-    border-left: 1px dotted #ccc;
-    padding-left: 8px;
-}
-
-.notes-header {
-    font-size: 7pt;
-    color: #bbb;
-    text-align: center;
-    margin-bottom: 4px;
-    font-style: italic;
-}
-
-.notes-line {
-    border-bottom: 1px dotted #ddd;
-    height: 20px;
-}
-
-.notes-divider {
-    border-bottom: 1px solid #ccc;
-    height: 20px;
-    margin-bottom: 2px;
 }
 
 .difficult-word {
@@ -422,11 +389,97 @@ body {
     border-radius: 2px;
 }
 
+.tab-nav {
+    display: flex;
+    border-bottom: 2px solid #2c3e50;
+    margin-bottom: 14px;
+}
+
+.tab-btn {
+    flex: 1;
+    padding: 8px 16px;
+    font-size: 10pt;
+    font-weight: 600;
+    text-align: center;
+    cursor: pointer;
+    border: none;
+    border-bottom: 3px solid transparent;
+    margin-bottom: -2px;
+    background: #ecf0f1;
+    color: #7f8c8d;
+    font-family: "Noto Sans SC", "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+}
+
+.tab-btn.active {
+    background: #fff;
+    color: #2c3e50;
+    border-bottom-color: #2c3e50;
+}
+
+.tab-btn:not(.active):hover {
+    background: #dfe6e9;
+}
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+.summary-section {
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: #ebf5fb;
+    border-left: 3px solid #3498db;
+    border-radius: 0 4px 4px 0;
+}
+
+.summary-title {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #2c3e50;
+    margin: 0 0 6px 0;
+}
+
+.summary-text {
+    font-size: 9.5pt;
+    line-height: 1.6;
+    color: #333;
+    margin: 0;
+}
+
+.classic-sentences-title {
+    font-size: 11pt;
+    font-weight: 700;
+    color: #2c3e50;
+    border-bottom: 2px solid #2c3e50;
+    padding-bottom: 4px;
+    margin: 0 0 10px 0;
+}
+
+.classic-sentence-item {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px dotted #e8e8e8;
+    page-break-inside: avoid;
+}
+
+.classic-sentence-item:last-child {
+    border-bottom: none;
+}
+
+.classic-sentence-num {
+    font-size: 8pt;
+    color: #3498db;
+    font-weight: 700;
+    margin-right: 4px;
+}
+
 @media print {
     body { max-width: none; padding: 0; margin: 0; font-size: 9.5pt; }
     .document-header { border-bottom: 2px solid #2c3e50; padding-bottom: 6px; }
-    .content-grid { display: grid; }
-    .notes-column { display: block; }
+    .tab-nav { display: none; }
+    .tab-panel { display: block !important; }
+    .tab-panel:not(.active) { page-break-before: always; }
+    .summary-section { background: none; border: 1px solid #bbb; }
+    .content-grid { display: block; }
     .segment { page-break-inside: avoid; }
     .word-list { page-break-before: always; grid-column: 1 / -1; }
     .phrase-list { page-break-before: always; grid-column: 1 / -1; }
@@ -448,13 +501,114 @@ body {
         padding: 1px 4px;
     }
 }
+
+@media (max-width: 600px) {
+    .tab-btn { font-size: 9pt; padding: 6px 8px; }
+}
 """
+
+
+_TAB_JS = """
+(function() {
+    var tabs = document.querySelectorAll('.tab-btn');
+    var panels = document.querySelectorAll('.tab-panel');
+    for (var i = 0; i < tabs.length; i++) {
+        tabs[i].addEventListener('click', function() {
+            for (var j = 0; j < tabs.length; j++) {
+                tabs[j].classList.remove('active');
+                panels[j].classList.remove('active');
+            }
+            this.classList.add('active');
+            var target = this.getAttribute('data-tab');
+            document.getElementById(target).classList.add('active');
+        });
+    }
+})();
+"""
+
+
+def _build_word_list_html(unique_words: dict[str, dict], filter_set: set[str] | None = None) -> str:
+    word_table_rows: list[str] = []
+    for word, ann in sorted(unique_words.items(), key=lambda x: x[1].get("cefr_level", "zz")):
+        if filter_set is not None and word not in filter_set:
+            continue
+        cefr = ann.get("cefr_level", "Unknown")
+        ipa = html.escape(ann.get("ipa", "—"))
+        chinese = html.escape(ann.get("chinese_definition", "—"))
+        badge_class = cefr.lower() if cefr.lower() in ("a1","a2","b1","b2","c1","c2") else "unknown"
+        word_table_rows.append(
+            f'<tr>'
+            f'<td class="word-cell">{html.escape(word)} <span class="ipa-cell">/{ipa}/</span></td>'
+            f'<td class="cefr-cell"><span class="cefr-badge {badge_class}">{html.escape(cefr)}</span></td>'
+            f'<td>{chinese}</td>'
+            f'</tr>'
+        )
+
+    if not word_table_rows:
+        return ""
+
+    return f"""
+    <div class="word-list">
+        <h2 class="word-list-title">生词表 Difficult Words</h2>
+        <table>
+            <thead>
+                <tr><th>单词 / 音标</th><th>等级</th><th>中文释义</th></tr>
+            </thead>
+            <tbody>
+                {"".join(word_table_rows)}
+            </tbody>
+        </table>
+        <div class="legend">
+            <div class="legend-title">标注说明</div>
+            <span class="legend-item"><span class="cefr-badge a1">A1</span> 入门</span>
+            <span class="legend-item"><span class="cefr-badge a2">A2</span> 初级</span>
+            <span class="legend-item"><span class="cefr-badge b1">B1</span> 中级</span>
+            <span class="legend-item"><span class="cefr-badge b2">B2</span> 中高级</span>
+            <span class="legend-item"><span class="cefr-badge c1">C1</span> 高级</span>
+            <span class="legend-item"><span class="cefr-badge c2">C2</span> 精通</span>
+            <span class="legend-phrase-item"><span class="legend-phrase-sample">短语</span> 值得学习的常用短语</span>
+        </div>
+    </div>
+    """
+
+
+def _build_phrase_list_html(unique_phrases: dict[str, dict], filter_set: set[str] | None = None) -> str:
+    phrase_table_rows: list[str] = []
+    for phrase, pa in sorted(unique_phrases.items()):
+        if filter_set is not None and phrase not in filter_set:
+            continue
+        chinese = html.escape(pa.get("chinese_definition", ""))
+        phrase_table_rows.append(
+            f'<tr>'
+            f'<td class="phrase-cell">{html.escape(phrase)}</td>'
+            f'<td>{chinese}</td>'
+            f'</tr>'
+        )
+
+    if not phrase_table_rows:
+        return ""
+
+    return f"""
+    <div class="phrase-list">
+        <h2 class="phrase-list-title">常用短语 Useful Phrases</h2>
+        <table>
+            <thead>
+                <tr><th>短语</th><th>中文释义</th></tr>
+            </thead>
+            <tbody>
+                {"".join(phrase_table_rows)}
+            </tbody>
+        </table>
+    </div>
+    """
 
 
 def generate_bilingual_html(
     video_info: dict,
     segments: list[dict],
     output_path: Path | None = None,
+    video_summary: str = "",
+    classic_sentences: list[dict] | None = None,
 ) -> str:
     title = html.escape(video_info.get("title", "未知标题"))
     author = html.escape(video_info.get("author", "未知"))
@@ -510,86 +664,103 @@ def generate_bilingual_html(
         if w not in unique_words:
             unique_words[w] = ann
 
-    word_table_rows: list[str] = []
-    for word, ann in sorted(unique_words.items(), key=lambda x: x[1].get("cefr_level", "zz")):
-        cefr = ann.get("cefr_level", "Unknown")
-        ipa = html.escape(ann.get("ipa", "—"))
-        chinese = html.escape(ann.get("chinese_definition", "—"))
-        badge_class = cefr.lower() if cefr.lower() in ("a1","a2","b1","b2","c1","c2") else "unknown"
-        word_table_rows.append(
-            f'<tr>'
-            f'<td class="word-cell">{html.escape(word)} <span class="ipa-cell">/{ipa}/</span></td>'
-            f'<td class="cefr-cell"><span class="cefr-badge {badge_class}">{html.escape(cefr)}</span></td>'
-            f'<td>{chinese}</td>'
-            f'</tr>'
-        )
-
-    word_list_html = ""
-    if unique_words:
-        word_list_html = f"""
-        <div class="word-list">
-            <h2 class="word-list-title">生词表 Difficult Words</h2>
-            <table>
-                <thead>
-                    <tr><th>单词 / 音标</th><th>等级</th><th>中文释义</th></tr>
-                </thead>
-                <tbody>
-                    {"".join(word_table_rows)}
-                </tbody>
-            </table>
-            <div class="legend">
-                <div class="legend-title">标注说明</div>
-                <span class="legend-item"><span class="cefr-badge a1">A1</span> 入门</span>
-                <span class="legend-item"><span class="cefr-badge a2">A2</span> 初级</span>
-                <span class="legend-item"><span class="cefr-badge b1">B1</span> 中级</span>
-                <span class="legend-item"><span class="cefr-badge b2">B2</span> 中高级</span>
-                <span class="legend-item"><span class="cefr-badge c1">C1</span> 高级</span>
-                <span class="legend-item"><span class="cefr-badge c2">C2</span> 精通</span>
-                <span class="legend-phrase-item"><span class="legend-phrase-sample">短语</span> 值得学习的常用短语</span>
-            </div>
-        </div>
-        """
-
     unique_phrases: dict[str, dict] = {}
     for pa in all_phrases:
         p = pa.get("phrase", "").lower()
         if p not in unique_phrases:
             unique_phrases[p] = pa
 
-    phrase_table_rows: list[str] = []
-    for phrase, pa in sorted(unique_phrases.items()):
-        chinese = html.escape(pa.get("chinese_definition", ""))
-        phrase_table_rows.append(
-            f'<tr>'
-            f'<td class="phrase-cell">{html.escape(phrase)}</td>'
-            f'<td>{chinese}</td>'
-            f'</tr>'
-        )
+    # Collect words/phrases from classic sentences for overview filtering
+    overview_word_set: set[str] = set()
+    overview_phrase_set: set[str] = set()
+    if classic_sentences:
+        for seg in classic_sentences:
+            for ann in seg.get("annotations", []):
+                overview_word_set.add(ann.get("word", "").lower())
+            for pa in seg.get("phrase_annotations", []):
+                overview_phrase_set.add(pa.get("phrase", "").lower())
 
-    phrase_list_html = ""
-    if unique_phrases:
-        phrase_list_html = f"""
-        <div class="phrase-list">
-            <h2 class="phrase-list-title">常用短语 Useful Phrases</h2>
-            <table>
-                <thead>
-                    <tr><th>短语</th><th>中文释义</th></tr>
-                </thead>
-                <tbody>
-                    {"".join(phrase_table_rows)}
-                </tbody>
-            </table>
+    has_overview = bool(classic_sentences)
+    tab_nav_html = ""
+    overview_panel_html = ""
+
+    if has_overview:
+        tab_nav_html = f"""
+        <div class="tab-nav">
+            <button class="tab-btn active" data-tab="tab-overview">概览 Overview</button>
+            <button class="tab-btn" data-tab="tab-detail">详读 Detail</button>
         </div>
         """
 
-    notes_lines: list[str] = []
-    notes_lines.append('<div class="notes-header">笔记 Notes</div>')
-    for seg in segments:
-        text_len = len(seg.get("text_original", ""))
-        note_lines = max(2, min(4, text_len // 40 + 1))
-        for _ in range(note_lines):
-            notes_lines.append('<div class="notes-line">&nbsp;</div>')
-        notes_lines.append('<div class="notes-divider">&nbsp;</div>')
+        overview_parts: list[str] = []
+
+        if video_summary:
+            escaped_summary = html.escape(video_summary)
+            overview_parts.append(f"""
+            <div class="summary-section">
+                <div class="summary-title">视频简介</div>
+                <p class="summary-text">{escaped_summary}</p>
+            </div>
+            """)
+
+        overview_parts.append('<div class="classic-sentences-title">经典句子 Classic Sentences</div>')
+
+        for idx, seg in enumerate(classic_sentences, 1):
+            orig = seg.get("text_original", "")
+            trans = seg.get("text_translated", "")
+            ann = seg.get("annotations", [])
+            phr = seg.get("phrase_annotations", [])
+            ts = _format_timestamp(seg.get("start_time"), seg.get("end_time"))
+
+            if is_chinese_source:
+                eng_html = html.escape(orig)
+                cn_html = _render_annotated_text(trans, ann, phr) if trans else ""
+            else:
+                eng_html = _render_annotated_text(orig, ann, phr)
+                cn_html = html.escape(trans) if trans else ""
+
+            ts_span = f'<span class="timestamp">{ts}</span> ' if ts else ""
+
+            overview_parts.append(f"""
+            <div class="classic-sentence-item">
+                <span class="classic-sentence-num">{idx}.</span>{ts_span}
+                <p class="english-line">{eng_html}</p>
+                {"<p class='chinese-line'>" + cn_html + "</p>" if cn_html else ""}
+            </div>
+            """)
+
+        # Overview word/phrase lists: only words from classic sentences
+        overview_word_html = _build_word_list_html(unique_words, overview_word_set)
+        overview_phrase_html = _build_phrase_list_html(unique_phrases, overview_phrase_set)
+
+        overview_panel_html = f"""
+        <div class="tab-panel active" id="tab-overview">
+            {"".join(overview_parts)}
+            {overview_word_html}
+            {overview_phrase_html}
+        </div>
+        """
+
+    # Detail word/phrase lists: all words
+    detail_word_html = _build_word_list_html(unique_words)
+    detail_phrase_html = _build_phrase_list_html(unique_phrases)
+
+    if has_overview:
+        detail_panel_html = f"""
+        <div class="tab-panel" id="tab-detail">
+            {"".join(segments_html_parts)}
+            {detail_word_html}
+            {detail_phrase_html}
+        </div>
+        """
+    else:
+        detail_panel_html = f"""
+        {"".join(segments_html_parts)}
+        {detail_word_html}
+        {detail_phrase_html}
+        """
+
+    script_html = f"<script>{_TAB_JS}</script>" if has_overview else ""
 
     full_html = f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -610,17 +781,10 @@ def generate_bilingual_html(
         <div class="video-url" id="doc-url">来源: {url}</div>
     </div>
 
-    <div class="content-grid">
-        <div class="subtitle-column">
-            {"".join(segments_html_parts)}
-        </div>
-        <div class="notes-column">
-            {"".join(notes_lines)}
-        </div>
-    </div>
-
-    {word_list_html}
-    {phrase_list_html}
+    {tab_nav_html}
+    {overview_panel_html}
+    {detail_panel_html}
+    {script_html}
 </body>
 </html>"""
 

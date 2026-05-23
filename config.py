@@ -1,6 +1,12 @@
 import os
 from pathlib import Path
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).parent / ".env")
+except ImportError:
+    pass
+
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 DOWNLOADS_DIR = DATA_DIR / "downloads"
@@ -28,3 +34,9 @@ TARGET_LANG = "zh-CN"
 HF_MIRROR_URL = "https://hf-mirror.com"
 
 APP_PORT = 8002
+
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_API_BASE = os.getenv("LLM_API_BASE", "https://api.openai.com/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+
+MAX_CLASSIC_SENTENCES = int(os.getenv("MAX_CLASSIC_SENTENCES", "20"))

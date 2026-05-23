@@ -48,6 +48,12 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_subtitles_video ON subtitles(video_id_fk);
         """)
+        for col in ("video_summary", "classic_sentences_json"):
+            try:
+                self.conn.execute(f"ALTER TABLE videos ADD COLUMN {col} TEXT")
+            except sqlite3.OperationalError:
+                pass
+        self.conn.commit()
 
     def save_video(self, info: dict) -> int:
         now = datetime.now(timezone.utc).isoformat()
@@ -160,6 +166,37 @@ class Database:
         cur = self.conn.execute("DELETE FROM videos WHERE id = ?", (video_id,))
         self.conn.commit()
         return cur.rowcount > 0
+
+    def save_video_extras(
+        self,
+        video_id: int,
+        video_summary: str = "",
+        classic_sentences: list[dict] | None = None,
+    ) -> None:
+        csj = json.dumps(classic_sentences, ensure_ascii=False) if classic_sentences else ""
+        self.conn.execute(
+            "UPDATE videos SET video_summary = ?, classic_sentences_json = ? WHERE id = ?",
+            (video_summary, csj, video_id),
+        )
+        self.conn.commit()
+
+    def get_video_extras(self, video_id: int) -> dict:
+        row = self.conn.execute(
+            "SELECT video_summary, classic_sentences_json FROM videos WHERE id = ?",
+            (video_id,),
+        ).fetchone()
+        if not row:
+            return {"video_summary": "", "classic_sentences": []}
+        result: dict = {"video_summary": row["video_summary"] or ""}
+        csj = row["classic_sentences_json"]
+        if csj:
+            try:
+                result["classic_sentences"] = json.loads(csj)
+            except (json.JSONDecodeError, TypeError):
+                result["classic_sentences"] = []
+        else:
+            result["classic_sentences"] = []
+        return result
 
     def close(self) -> None:
         if self._conn:

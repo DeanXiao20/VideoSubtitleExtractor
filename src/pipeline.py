@@ -30,6 +30,8 @@ class PipelineResult:
     video_info: dict
     segments: list[dict]
     video_id: int
+    video_summary: str = ""
+    classic_sentences: list[dict] | None = None
 
 
 class Pipeline:

@@ -7,7 +7,7 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import SETTINGS_PATH, DATA_DIR, OUTPUT_DIR, CEFR_DIFFICULTY_THRESHOLD, WHISPER_MODEL_SIZE, APP_PORT
+from config import SETTINGS_PATH, DATA_DIR, OUTPUT_DIR, CEFR_DIFFICULTY_THRESHOLD, WHISPER_MODEL_SIZE, APP_PORT, MAX_CLASSIC_SENTENCES
 
 
 def load_settings() -> dict:
@@ -35,6 +35,52 @@ def _get_share_url(filename: str) -> str:
         return f"{base}/output/{filename}"
     ip = _get_local_ip()
     return f"http://{ip}:{APP_PORT}/output/{filename}"
+
+
+def regenerate_html_with_extras(video: dict, settings: dict) -> tuple[int, bool]:
+    from src.database import Database
+    from src.sentence_extractor import extract_extras
+    from src.html_generator import generate_bilingual_html
+
+    db = Database()
+    vid = video["id"]
+    segments = db.get_segments(vid)
+
+    status_steps = {}
+
+    def progress_callback(stage: str, fraction: float, text: str):
+        if stage == "extract" and status_steps:
+            status_steps["text"].markdown(f"**{text}**")
+            status_steps["bar"].progress(min(fraction, 1.0))
+
+    with st.status("正在提取简介和经典句子...", expanded=True) as status:
+        status_steps = {
+            "text": st.empty(),
+            "bar": st.progress(0),
+        }
+        try:
+            summary, classic, used_llm = extract_extras(
+                segments, video, settings,
+                max_count=MAX_CLASSIC_SENTENCES,
+                progress_callback=progress_callback,
+            )
+        except RuntimeError as e:
+            status.update(label="提取失败", state="error", expanded=False)
+            db.close()
+            st.error(str(e))
+            return 0, False
+
+        status_steps["text"].markdown("**正在生成 HTML...**")
+        status_steps["bar"].progress(0.9)
+
+        db.save_video_extras(vid, summary, classic)
+        output_path = OUTPUT_DIR / f"{video.get('video_id', 'output')}.html"
+        generate_bilingual_html(video, segments, output_path, summary, classic)
+
+        status.update(label="提取完成（AI 分析）", state="complete", expanded=False)
+
+    db.close()
+    return len(classic), used_llm
 
 
 def init_session_state() -> None:
@@ -155,7 +201,7 @@ def render_generate_tab() -> None:
             st.link_button("▶ 打开原视频", video_url)
 
     # Action buttons
-    btn_col1, btn_col2, btn_col3, btn_col4 = st.columns(4)
+    btn_col1, btn_col2, btn_col3, btn_col4, btn_col5 = st.columns(5)
     with btn_col1:
         if st.button("🖨️ 打印", use_container_width=True):
             st.components.v1.html(
@@ -179,6 +225,12 @@ def render_generate_tab() -> None:
             info_text += f" | 短语: {phrase_count}段"
         st.info(info_text)
     with btn_col4:
+        if st.button("提取简介和经典句子", use_container_width=True, key="gen_extract"):
+            count, used_llm = regenerate_html_with_extras(info, dict(st.session_state.settings))
+            if count > 0:
+                st.success(f"已提取简介和 {count} 句经典句子")
+                st.rerun()
+    with btn_col5:
         if st.button("📱 微信分享", use_container_width=True):
             from src.share_server import generate_qr_code
             filename = f"{info.get('video_id', 'output')}.html"
@@ -230,7 +282,7 @@ def show_preview_dialog(video: dict, segments: list[dict]):
         enriched.append(s)
     segments = enriched
 
-    html_content = generate_bilingual_html(video, segments)
+    html_content = generate_bilingual_html(video, segments, video_summary="", classic_sentences=None)
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -327,6 +379,11 @@ def render_history_tab() -> None:
                     st.link_button("查看", f"/output/{video_id}.html", use_container_width=True)
                 else:
                     st.caption("无HTML文件")
+                if st.button("提取简介和经典句子", key=f"extract_{vid}", use_container_width=True):
+                    count, used_llm = regenerate_html_with_extras(video, dict(st.session_state.settings))
+                    if count > 0:
+                        st.success(f"已提取简介和 {count} 句经典句子")
+                        st.rerun()
                 if st.button("删除", key=f"del_{vid}", use_container_width=True):
                     confirm_delete_dialog(db, vid, video.get("title", "未知标题"))
 
@@ -402,6 +459,15 @@ def render_settings_tab() -> None:
         st.session_state.settings = settings
         save_settings(settings)
         st.success("设置已保存")
+
+    st.markdown("### AI 摘要配置")
+    st.caption("配置后提取经典句子和视频简介时使用 LLM，未配置则使用规则评分。")
+    from config import LLM_API_KEY, LLM_API_BASE, LLM_MODEL
+    key_status = "已配置" if LLM_API_KEY else "未配置"
+    st.markdown(f"- **API Key:** {key_status}")
+    st.markdown(f"- **API Base:** `{LLM_API_BASE}`")
+    st.markdown(f"- **模型:** `{LLM_MODEL}`")
+    st.caption("编辑项目根目录 `.env` 文件修改配置（LLM_API_KEY / LLM_API_BASE / LLM_MODEL）")
 
     st.markdown("### 微信分享 / frp 外网配置")
     st.caption(f"局域网分享无需配置。外网分享需 frp 将本地 {APP_PORT} 端口映射到公网。")
