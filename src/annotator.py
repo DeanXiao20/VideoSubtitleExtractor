@@ -25,6 +25,82 @@ _SKIP_WORDS = frozenset({
 
 _PHRASE_DICT: dict[str, str] | None = None
 
+_IRREGULAR_VERBS: dict[str, list[str]] = {
+    "be": ["am", "is", "are", "was", "were", "been", "being"],
+    "have": ["has", "had", "having"],
+    "do": ["does", "did", "done", "doing"],
+    "give": ["gives", "gave", "given", "giving"],
+    "take": ["takes", "took", "taken", "taking"],
+    "get": ["gets", "got", "gotten", "getting"],
+    "come": ["comes", "came", "coming"],
+    "go": ["goes", "went", "gone", "going"],
+    "run": ["runs", "ran", "running"],
+    "make": ["makes", "made", "making"],
+    "find": ["finds", "found", "finding"],
+    "see": ["sees", "saw", "seen", "seeing"],
+    "say": ["says", "said", "saying"],
+    "tell": ["tells", "told", "telling"],
+    "think": ["thinks", "thought", "thinking"],
+    "know": ["knows", "knew", "known", "knowing"],
+    "leave": ["leaves", "left", "leaving"],
+    "feel": ["feels", "felt", "feeling"],
+    "bring": ["brings", "brought", "bringing"],
+    "begin": ["begins", "began", "begun", "beginning"],
+    "keep": ["keeps", "kept", "keeping"],
+    "hold": ["holds", "held", "holding"],
+    "stand": ["stands", "stood", "standing"],
+    "hear": ["hears", "heard", "hearing"],
+    "let": ["lets", "letting"],
+    "mean": ["means", "meant", "meaning"],
+    "set": ["sets", "setting"],
+    "meet": ["meets", "met", "meeting"],
+    "pay": ["pays", "paid", "paying"],
+    "sit": ["sits", "sat", "sitting"],
+    "speak": ["speaks", "spoke", "spoken", "speaking"],
+    "lie": ["lies", "lay", "lain", "lying"],
+    "lead": ["leads", "led", "leading"],
+    "read": ["reads", "reading"],
+    "grow": ["grows", "grew", "grown", "growing"],
+    "lose": ["loses", "lost", "losing"],
+    "fall": ["falls", "fell", "fallen", "falling"],
+    "send": ["sends", "sent", "sending"],
+    "build": ["builds", "built", "building"],
+    "spend": ["spends", "spent", "spending"],
+    "cut": ["cuts", "cutting"],
+    "rise": ["rises", "rose", "risen", "rising"],
+    "draw": ["draws", "drew", "drawn", "drawing"],
+    "break": ["breaks", "broke", "broken", "breaking"],
+    "wear": ["wears", "wore", "worn", "wearing"],
+    "choose": ["chooses", "chose", "chosen", "choosing"],
+    "deal": ["deals", "dealt", "dealing"],
+    "win": ["wins", "won", "winning"],
+    "drive": ["drives", "drove", "driven", "driving"],
+    "throw": ["throws", "threw", "thrown", "throwing"],
+    "catch": ["catches", "caught", "catching"],
+    "buy": ["buys", "bought", "buying"],
+    "teach": ["teaches", "taught", "teaching"],
+    "put": ["puts", "putting"],
+}
+
+
+def _inflect_first_token(token: str) -> list[str]:
+    if token in _IRREGULAR_VERBS:
+        return _IRREGULAR_VERBS[token]
+    base = token
+    variants = [base + "s"]
+    if base.endswith(("s", "x", "z", "ch", "sh")):
+        variants.append(base + "es")
+    if base.endswith("y") and len(base) > 1 and base[-2] not in "aeiou":
+        variants.append(base[:-1] + "ies")
+        variants.append(base[:-1] + "ied")
+    if base.endswith("e"):
+        variants.append(base + "d")
+        variants.append(base[:-1] + "ing")
+    else:
+        variants.append(base + "ed")
+        variants.append(base + "ing")
+    return variants
+
 
 def _load_phrase_dict() -> dict[str, str]:
     global _PHRASE_DICT
@@ -87,6 +163,20 @@ def _find_phrases(text: str, phrase_dict: dict[str, str]) -> list[PhraseAnnotati
     found: list[PhraseAnnotation] = []
     used_ranges: list[tuple[int, int]] = []
 
+    def _try_add(pos: int, end: int, definition: str) -> None:
+        if pos < 0 or end > len(text):
+            return
+        if any(not (end <= s or pos >= e) for s, e in used_ranges):
+            return
+        found.append(PhraseAnnotation(
+            phrase=text[pos:end],
+            chinese_definition=definition,
+            start_pos=pos,
+            end_pos=end,
+        ))
+        used_ranges.append((pos, end))
+
+    # Pass 1: exact match (preserves existing behavior, takes precedence)
     for phrase, definition in phrase_dict.items():
         phrase_lower = phrase.lower()
         phrase_words = phrase_lower.split()
@@ -99,17 +189,29 @@ def _find_phrases(text: str, phrase_dict: dict[str, str]) -> list[PhraseAnnotati
             if pos == -1:
                 break
             end = pos + len(phrase_lower)
-
-            overlaps = any(not (end <= s or pos >= e) for s, e in used_ranges)
-            if not overlaps and len(phrase_words) >= 2:
-                found.append(PhraseAnnotation(
-                    phrase=text[pos:end],
-                    chinese_definition=definition,
-                    start_pos=pos,
-                    end_pos=end,
-                ))
-                used_ranges.append((pos, end))
+            _try_add(pos, end, definition)
             start = pos + 1
+
+    # Pass 2: inflected first-token match (turn out -> turned out, etc.)
+    for phrase, definition in phrase_dict.items():
+        phrase_lower = phrase.lower()
+        phrase_words = phrase_lower.split()
+        if len(phrase_words) < 2:
+            continue
+        first = phrase_words[0]
+        rest = phrase_words[1:]
+        for variant in _inflect_first_token(first):
+            if variant == first:
+                continue
+            variant_phrase = variant + " " + " ".join(rest)
+            start = 0
+            while True:
+                pos = text_lower.find(variant_phrase, start)
+                if pos == -1:
+                    break
+                end = pos + len(variant_phrase)
+                _try_add(pos, end, definition)
+                start = pos + 1
 
     found.sort(key=lambda p: p.start_pos)
     return found
