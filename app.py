@@ -8,10 +8,33 @@ import streamlit as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import SETTINGS_PATH, DATA_DIR, OUTPUT_DIR, CEFR_DIFFICULTY_THRESHOLD, WHISPER_MODEL_SIZE, APP_PORT, MAX_CLASSIC_SENTENCES
+from config import (
+    SETTINGS_PATH,
+    DATA_DIR,
+    OUTPUT_DIR,
+    CEFR_DIFFICULTY_THRESHOLD,
+    WHISPER_MODEL_SIZE,
+    APP_PORT,
+    MAX_CLASSIC_SENTENCES,
+)
 from src.pipeline import PipelineResult
 
 _logger = logging.getLogger(__name__)
+
+
+_HISTORY_CSS = """
+<style>
+.vid-extras-badge {
+    display: inline-block;
+    font-size: 11px;
+    color: #64748b;
+    background: #f1f5f9;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-right: 4px;
+}
+</style>
+"""
 
 
 def load_settings() -> dict:
@@ -34,6 +57,7 @@ def save_settings(settings: dict) -> None:
 def _get_cloudflare_url(filename: str) -> str:
     """Return the public Cloudflare Pages URL for a file, or empty if not configured."""
     from config import CF_PAGES_PROJECT
+
     if not CF_PAGES_PROJECT:
         return ""
     return f"https://{CF_PAGES_PROJECT}.pages.dev/{filename}"
@@ -45,7 +69,12 @@ def _get_share_url(filename: str) -> str:
     if cf_url:
         return cf_url
     from src.share_server import _get_local_ip
-    frp_url = st.session_state.settings.get("frp_public_url", "") if "settings" in st.session_state else ""
+
+    frp_url = (
+        st.session_state.settings.get("frp_public_url", "")
+        if "settings" in st.session_state
+        else ""
+    )
     if frp_url:
         base = frp_url.rstrip("/")
         return f"{base}/output/{filename}"
@@ -81,7 +110,9 @@ def _reannotate_in_place(
     threshold = settings.get("difficulty_threshold", CEFR_DIFFICULTY_THRESHOLD)
 
     annotated = annotate_all_segments(
-        segments, cefr_lookup, translator,
+        segments,
+        cefr_lookup,
+        translator,
         threshold=threshold,
         progress_callback=progress_cb,
     )
@@ -125,7 +156,9 @@ def _reannotate_in_place(
     return annotated
 
 
-def regenerate_html_with_extras(video: dict, settings: dict, db=None) -> tuple[int, bool]:
+def regenerate_html_with_extras(
+    video: dict, settings: dict, db=None
+) -> tuple[int, bool]:
     from src.sentence_extractor import extract_extras
     from src.html_generator import generate_bilingual_html
     from src.database import Database
@@ -156,7 +189,9 @@ def regenerate_html_with_extras(video: dict, settings: dict, db=None) -> tuple[i
             }
             try:
                 summary, classic, used_llm = extract_extras(
-                    segments, video, settings,
+                    segments,
+                    video,
+                    settings,
                     max_count=MAX_CLASSIC_SENTENCES,
                     progress_callback=progress_callback,
                 )
@@ -169,7 +204,9 @@ def regenerate_html_with_extras(video: dict, settings: dict, db=None) -> tuple[i
             status_steps["bar"].progress(0.9)
 
         # Save to DB OUTSIDE the st.status block to avoid widget-related interruptions
-        _logger.info(f"Saving extras for vid={vid}: {len(classic)} classic sentences, summary={bool(summary)}")
+        _logger.info(
+            f"Saving extras for vid={vid}: {len(classic)} classic sentences, summary={bool(summary)}"
+        )
         db.save_video_extras(vid, summary, classic)
         try:
             db.conn.commit()
@@ -190,25 +227,39 @@ def regenerate_html_with_extras(video: dict, settings: dict, db=None) -> tuple[i
                     ann_bar.progress(min(fraction, 1.0))
 
                 try:
-                    annotated = _reannotate_in_place(vid, segments, settings, db, progress_cb=ann_cb)
+                    annotated = _reannotate_in_place(
+                        vid, segments, settings, db, progress_cb=ann_cb
+                    )
                     ann_text.markdown("**完成**")
                     ann_bar.progress(1.0)
-                    ann_status.update(label="重新标注完成", state="complete", expanded=False)
+                    ann_status.update(
+                        label="重新标注完成", state="complete", expanded=False
+                    )
                 except Exception as e:
-                    _logger.exception("Re-annotation failed during regenerate_html_with_extras")
-                    ann_status.update(label="标注失败（仍会重新生成HTML）", state="error", expanded=False)
+                    _logger.exception(
+                        "Re-annotation failed during regenerate_html_with_extras"
+                    )
+                    ann_status.update(
+                        label="标注失败（仍会重新生成HTML）",
+                        state="error",
+                        expanded=False,
+                    )
                     st.warning(f"标注失败：{e}，将使用旧标注重新生成 HTML")
 
         html_filename = db.get_html_filename(vid)
         if not html_filename:
             from src.utils import slugify_title
+
             html_filename = f"{slugify_title(video.get('title', ''), video.get('video_id', 'output'))}.html"
             db.save_html_filename(vid, html_filename)
         output_path = OUTPUT_DIR / html_filename
         generate_bilingual_html(video, annotated, output_path, summary, classic)
 
         # Update pipeline_result in session_state so preview shows fresh HTML
-        if st.session_state.get("pipeline_result") and st.session_state.pipeline_result.video_id == vid:
+        if (
+            st.session_state.get("pipeline_result")
+            and st.session_state.pipeline_result.video_id == vid
+        ):
             if output_path.exists():
                 new_html = output_path.read_text(encoding="utf-8")
                 result = st.session_state.pipeline_result
@@ -270,7 +321,9 @@ def reannotate_video(video: dict, settings: dict, db=None) -> int:
                 text_slot.markdown(f"**{text}**")
                 bar.progress(min(fraction, 1.0))
 
-            annotated = _reannotate_in_place(vid, segments, settings, db, progress_cb=cb)
+            annotated = _reannotate_in_place(
+                vid, segments, settings, db, progress_cb=cb
+            )
 
             text_slot.markdown("**正在生成HTML...**")
             bar.progress(0.95)
@@ -278,6 +331,7 @@ def reannotate_video(video: dict, settings: dict, db=None) -> int:
             html_filename = db.get_html_filename(vid)
             if not html_filename:
                 from src.utils import slugify_title
+
                 html_filename = f"{slugify_title(video.get('title', ''), video.get('video_id', 'output'))}.html"
                 db.save_html_filename(vid, html_filename)
             output_path = OUTPUT_DIR / html_filename
@@ -292,9 +346,11 @@ def reannotate_video(video: dict, settings: dict, db=None) -> int:
             status.update(label="重新标注完成", state="complete", expanded=False)
 
         # Sync session_state preview if this video is currently shown
-        if (st.session_state.get("pipeline_result")
-                and st.session_state.pipeline_result.video_id == vid
-                and output_path.exists()):
+        if (
+            st.session_state.get("pipeline_result")
+            and st.session_state.pipeline_result.video_id == vid
+            and output_path.exists()
+        ):
             new_html = output_path.read_text(encoding="utf-8")
             r = st.session_state.pipeline_result
             st.session_state.pipeline_result = PipelineResult(
@@ -340,19 +396,28 @@ def render_generate_tab() -> None:
             "medium": "Medium (1.5GB)",
             "large-v3": "Large-v3 (3GB, 最准确)",
         }
-        current_model = st.session_state.settings.get("whisper_model", WHISPER_MODEL_SIZE)
+        current_model = st.session_state.settings.get(
+            "whisper_model", WHISPER_MODEL_SIZE
+        )
         model_choice = st.selectbox(
             "Whisper模型",
             options=list(model_display.keys()),
             format_func=lambda x: model_display.get(x, x),
-            index=list(model_display.keys()).index(current_model) if current_model in model_display else 2,
+            index=(
+                list(model_display.keys()).index(current_model)
+                if current_model in model_display
+                else 2
+            ),
         )
     with col4:
-        force_rerun = st.checkbox("从头开始", value=False, help="忽略已有进度，重新处理所有步骤")
+        force_rerun = st.checkbox(
+            "从头开始", value=False, help="忽略已有进度，重新处理所有步骤"
+        )
 
     # Check for existing progress
     if url.strip() and not force_rerun:
         from src.database import Database
+
         _chk_db = Database()
         _existing = _chk_db.get_video_by_url(url.strip())
         if _existing:
@@ -365,10 +430,14 @@ def render_generate_tab() -> None:
                     "annotated": "生词标注",
                 }
                 _stage_label = stage_names.get(_pstage, _pstage)
-                st.info(f"检测到上次处理中断于【{_stage_label}】阶段，将从断点继续。勾选「从头开始」可重新处理。")
+                st.info(
+                    f"检测到上次处理中断于【{_stage_label}】阶段，将从断点继续。勾选「从头开始」可重新处理。"
+                )
         _chk_db.close()
 
-    generate_clicked = st.button("一键生成双语字幕", type="primary", use_container_width=True)
+    generate_clicked = st.button(
+        "一键生成双语字幕", type="primary", use_container_width=True
+    )
 
     if generate_clicked:
         if not url.strip():
@@ -396,6 +465,7 @@ def render_generate_tab() -> None:
 
             try:
                 from src.pipeline import Pipeline
+
                 settings = dict(st.session_state.settings)
                 settings["whisper_model"] = model_choice
                 pipeline = Pipeline(settings=settings)
@@ -413,6 +483,7 @@ def render_generate_tab() -> None:
 
             except Exception as e:
                 import logging
+
                 logging.getLogger(__name__).exception("Pipeline failed")
                 status.update(label="处理失败", state="error", expanded=True)
                 msg = str(e)
@@ -449,6 +520,7 @@ def render_generate_tab() -> None:
         _vid_info = info.get("id") or result.video_id
         if _vid_info:
             from src.database import Database as _DB2
+
             _db2 = _DB2()
             _extras = _db2.get_video_extras(_vid_info)
             _db2.close()
@@ -466,7 +538,7 @@ def render_generate_tab() -> None:
     with btn_col1:
         if st.button("🖨️ 打印", use_container_width=True):
             st.components.v1.html(
-                '<script>window.print();</script>',
+                "<script>window.print();</script>",
                 height=0,
             )
     with btn_col2:
@@ -480,7 +552,9 @@ def render_generate_tab() -> None:
         )
     with btn_col3:
         difficult_count = sum(1 for seg in result.segments if seg.get("annotations"))
-        phrase_count = sum(1 for seg in result.segments if seg.get("phrase_annotations"))
+        phrase_count = sum(
+            1 for seg in result.segments if seg.get("phrase_annotations")
+        )
         info_text = f"生词: {difficult_count}段"
         if phrase_count:
             info_text += f" | 短语: {phrase_count}段"
@@ -491,13 +565,18 @@ def render_generate_tab() -> None:
         _vid_for_extras = info.get("id") or result.video_id
         if _vid_for_extras:
             from src.database import Database as _DB
+
             _chk_db = _DB()
             _chk_extras = _chk_db.get_video_extras(_vid_for_extras)
             _chk_db.close()
-            _has_extras = bool(_chk_extras.get("video_summary") or _chk_extras.get("classic_sentences"))
+            _has_extras = bool(
+                _chk_extras.get("video_summary") or _chk_extras.get("classic_sentences")
+            )
         _extract_label = "重新提取" if _has_extras else "提取简介和经典句子"
         if st.button(_extract_label, use_container_width=True, key="gen_extract"):
-            count, used_llm = regenerate_html_with_extras(info, dict(st.session_state.settings))
+            count, used_llm = regenerate_html_with_extras(
+                info, dict(st.session_state.settings)
+            )
             if count > 0:
                 st.success(f"已提取简介和 {count} 句经典句子")
                 st.rerun()
@@ -505,7 +584,10 @@ def render_generate_tab() -> None:
         if st.button("发布", use_container_width=True, key="gen_publish"):
             from src.publish import publish_single
             from src.share_server import generate_qr_code
-            publish_fn = result.html_filename or f"{info.get('video_id', 'output')}.html"
+
+            publish_fn = (
+                result.html_filename or f"{info.get('video_id', 'output')}.html"
+            )
             pub_result = publish_single(publish_fn)
             if pub_result["success"]:
                 pub_url = pub_result["url"] or f"https://subtitle-docs.pages.dev"
@@ -517,6 +599,7 @@ def render_generate_tab() -> None:
     with btn_col6:
         if st.button("📱 微信分享", use_container_width=True):
             from src.share_server import generate_qr_code
+
             filename = result.html_filename or f"{info.get('video_id', 'output')}.html"
             share_url = _get_share_url(filename)
             qr_bytes = generate_qr_code(share_url)
@@ -534,7 +617,10 @@ def render_generate_tab() -> None:
             with url_col:
                 st.markdown("**微信扫码或复制链接打开**")
                 st.code(share_url, language=None)
-                st.caption("同一WiFi下直接扫码。外网访问需配置frp，见设置页。如无法访问，请以管理员身份运行cmd开放端口: netsh advfirewall firewall add rule name=Share dir=in action=allow protocol=tcp localport=" + str(APP_PORT))
+                st.caption(
+                    "同一WiFi下直接扫码。外网访问需配置frp，见设置页。如无法访问，请以管理员身份运行cmd开放端口: netsh advfirewall firewall add rule name=Share dir=in action=allow protocol=tcp localport="
+                    + str(APP_PORT)
+                )
 
     # Publish result display
     if st.session_state.get("_publish_qr"):
@@ -580,7 +666,9 @@ def show_preview_dialog(video: dict, segments: list[dict]):
         enriched.append(s)
     segments = enriched
 
-    html_content = generate_bilingual_html(video, segments, video_summary="", classic_sentences=None)
+    html_content = generate_bilingual_html(
+        video, segments, video_summary="", classic_sentences=None
+    )
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -593,12 +681,16 @@ def show_preview_dialog(video: dict, segments: list[dict]):
         )
     with col2:
         if st.button("🖨️ 打印", use_container_width=True):
-            st.components.v1.html('<script>window.print();</script>', height=0)
+            st.components.v1.html("<script>window.print();</script>", height=0)
     with col3:
         if st.button("📱 微信分享"):
             from src.share_server import generate_qr_code
+
             _db = Database()
-            filename = _db.get_html_filename(video.get("id", 0)) or f"{video.get('video_id', 'output')}.html"
+            filename = (
+                _db.get_html_filename(video.get("id", 0))
+                or f"{video.get('video_id', 'output')}.html"
+            )
             _db.close()
             share_url = _get_share_url(filename)
             qr_bytes = generate_qr_code(share_url)
@@ -615,7 +707,10 @@ def show_preview_dialog(video: dict, segments: list[dict]):
             with url_col:
                 st.markdown("**微信扫码或复制链接打开**")
                 st.code(share_url, language=None)
-                st.caption("手机需与电脑在同一WiFi网络下。如无法访问，请以管理员身份运行cmd: netsh advfirewall firewall add rule name=Share dir=in action=allow protocol=tcp localport=" + str(APP_PORT))
+                st.caption(
+                    "手机需与电脑在同一WiFi网络下。如无法访问，请以管理员身份运行cmd: netsh advfirewall firewall add rule name=Share dir=in action=allow protocol=tcp localport="
+                    + str(APP_PORT)
+                )
 
     with st.container(height=800):
         st.components.v1.html(html_content, height=800, scrolling=True)
@@ -650,23 +745,238 @@ def edit_video_dialog(db, video: dict):
             st.rerun()
 
 
+def _video_meta(db, video: dict) -> dict:
+    vid = video["id"]
+    pstage = video.get("pipeline_stage", "")
+    is_incomplete = bool(pstage) and pstage != "completed"
+    html_fn = db.get_html_filename(vid) or f"{video.get('video_id', '')}.html"
+    html_path = OUTPUT_DIR / html_fn
+    cf_url = _get_cloudflare_url(html_fn) if html_path.exists() else ""
+    extras = db.get_video_extras(vid)
+    duration_s = video.get("duration_seconds", 0)
+    m, s = divmod(int(duration_s or 0), 60)
+    h, m = divmod(m, 60)
+    dur_str = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+    has_summary = bool(extras.get("video_summary"))
+    has_classic = bool(extras.get("classic_sentences"))
+    classic_count = len(extras.get("classic_sentences", []))
+    is_published = bool(cf_url)
+    return {
+        "vid": vid,
+        "title": video.get("title", "未知标题"),
+        "dur_str": dur_str,
+        "pstage": pstage,
+        "is_incomplete": is_incomplete,
+        "html_path": html_path,
+        "html_fn": html_fn,
+        "cf_url": cf_url,
+        "has_summary": has_summary,
+        "has_classic": has_classic,
+        "classic_count": classic_count,
+        "is_published": is_published,
+        "updated_date": (video.get("updated_at") or "")[:10],
+        "video_url": video.get("url", ""),
+        "author": video.get("author", ""),
+        "platform": video.get("platform", ""),
+    }
+
+
+def _render_actions_popover(m: dict, video: dict, db) -> None:
+    vid = m["vid"]
+    with st.popover("⋯", help="更多操作"):
+        if m["cf_url"]:
+            st.link_button("🌐 在线查看", m["cf_url"], use_container_width=True)
+        if st.button(
+            "🔄 重新标注",
+            key=f"reannot_{vid}",
+            use_container_width=True,
+            help="使用最新词典重新标注，不会重新抽取视频",
+        ):
+            n = reannotate_video(video, dict(st.session_state.settings), db=db)
+            if n is not None:
+                st.success(f"已重新标注，共 {n} 个短语")
+                st.rerun()
+        if st.button(
+            "✨ 提取简介与经典句",
+            key=f"extract_{vid}",
+            use_container_width=True,
+            help="提取简介与经典句子，并同步重新标注",
+        ):
+            count, _used = regenerate_html_with_extras(
+                video, dict(st.session_state.settings), db=db
+            )
+            if count > 0:
+                st.success(f"已提取简介和 {count} 句经典句子")
+                st.rerun()
+        st.divider()
+        if st.button("✏️ 编辑", key=f"edit_{vid}", use_container_width=True):
+            edit_video_dialog(db, video)
+        if st.button("🗑️ 删除", key=f"del_{vid}", use_container_width=True):
+            confirm_delete_dialog(db, vid, m["title"])
+
+
+def _stage_label(pstage: str) -> str:
+    names = {
+        "extracted": "视频信息提取",
+        "transcribed": "字幕/转录",
+        "translated": "翻译",
+        "annotated": "生词标注",
+    }
+    return names.get(pstage, pstage)
+
+
+def _extras_caption(m: dict) -> str:
+    parts = []
+    if m["has_summary"]:
+        parts.append("简介")
+    if m["has_classic"]:
+        parts.append(f"{m['classic_count']}句经典句")
+    return " · ".join(parts)
+
+
+def _meta_line(m: dict) -> str:
+    parts = [
+        m["author"] or "未知",
+        m["dur_str"],
+        m["platform"] or "未知",
+        m["updated_date"],
+    ]
+    if m["is_incomplete"]:
+        parts.append(f"⏸ {_stage_label(m['pstage'])}")
+    return " · ".join(parts)
+
+
+def _strip_status_class(m: dict) -> str:
+    """Return CSS class for the sidebar strip based on video status."""
+    if m["is_incomplete"]:
+        return "status-incomplete"
+    if m["is_published"]:
+        return "status-published"
+    return "status-completed"
+
+
+def _render_video_card(m: dict, video: dict, db, index: int) -> None:
+    status_cls = _strip_status_class(m)
+    border_colors = {
+        "status-completed": "#2563eb",
+        "status-published": "#16a34a",
+        "status-incomplete": "#ea580c",
+    }
+    border_color = border_colors.get(status_cls, "#2563eb")
+
+    title = m["title"]
+    video_url = m["video_url"]
+    meta = _meta_line(m)
+    extras = _extras_caption(m)
+    caption_parts = [meta]
+    if extras:
+        caption_parts.append(extras)
+    meta_str = " · ".join(caption_parts)
+
+    link_html = ""
+    if video_url and video_url.startswith("http"):
+        link_html = (
+            f'<div style="margin-top:2px;">'
+            f'<a href="{video_url}" target="_blank" '
+            f'style="font-size:12px;color:#2563eb;text-decoration:none;">'
+            f"{video_url} ↗</a></div>"
+        )
+
+    # Left: info with border-left strip | Right: action buttons
+    c_body, c_b1, c_b2, c_b3 = st.columns([6.5, 1, 1, 0.7])
+    with c_body:
+        st.markdown(
+            f'<div style="border-left:4px solid {border_color};'
+            f'padding:6px 16px;margin-bottom:2px;">'
+            f'<div style="font-weight:700;font-size:16px;">{title}</div>'
+            f'<div style="font-size:12px;color:#666;margin-top:2px;">{meta_str}</div>'
+            f"{link_html}"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    with c_b1:
+        if m["html_path"].exists():
+            st.link_button(
+                "📄 打开", f"/output/{m['html_fn']}", use_container_width=True
+            )
+        elif m["cf_url"]:
+            st.link_button("📄 在线", m["cf_url"], use_container_width=True)
+        else:
+            st.button(
+                "📄", key=f"noview_{m['vid']}", disabled=True, use_container_width=True
+            )
+    with c_b2:
+        if m["is_incomplete"]:
+            if st.button(
+                "▶ 继续",
+                key=f"resume_{m['vid']}",
+                use_container_width=True,
+                help="从断点继续处理",
+            ):
+                db.close()
+                from src.pipeline import Pipeline
+
+                _pipeline = Pipeline(settings=dict(st.session_state.settings))
+                try:
+                    _pipeline.run(
+                        video.get("url", ""),
+                        prefer_subtitles=True,
+                        progress_callback=lambda s, f, t: None,
+                    )
+                    st.success("处理完成!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"继续处理失败: {e}")
+        else:
+            if st.button(
+                "🚀 发布",
+                key=f"publish_{m['vid']}",
+                use_container_width=True,
+                help="发布到 Cloudflare Pages",
+            ):
+                from src.publish import publish_single
+
+                pub_result = publish_single(m["html_fn"])
+                if pub_result["success"]:
+                    pub_url = (
+                        pub_result["url"]
+                        or _get_cloudflare_url(m["html_fn"])
+                        or "https://subtitle-docs.pages.dev"
+                    )
+                    st.success("已发布到线上")
+                    st.link_button("打开网页", pub_url)
+                    st.code(pub_url, language=None)
+                    st.session_state.pop("_cf_index_qr", None)
+                else:
+                    st.error(f"发布失败: {pub_result['error']}")
+    with c_b3:
+        _render_actions_popover(m, video, db)
+
+    # Spacing between cards
+    st.markdown('<div style="height:2px;"></div>', unsafe_allow_html=True)
+
+
 def render_history_tab() -> None:
     from src.database import Database
+
     db = Database()
 
-    # Check for pending extras saved to session_state (recovery after rerun)
     _pending = st.session_state.pop("_pending_extras", None)
     if _pending and _pending.get("saved"):
-        # Data was already saved to DB before rerun, just clear the flag
         pass
 
     try:
         search = st.text_input("搜索视频标题...", placeholder="输入关键词")
 
-        # Cloudflare index page QR + URL — quick access to the published list
+        # Inject CSS
+        st.markdown(_HISTORY_CSS, unsafe_allow_html=True)
+
+        # Color legend
+        st.caption("🔵 已完成  ·  🟢 已发布  ·  🟠 处理中")
+
+        # Cloudflare index page QR + URL
         index_url = _get_cloudflare_url("index.html")
         if index_url:
-            # Show clean root URL (without /index.html) for friendlier display
             root_url = index_url.rsplit("/", 1)[0] + "/"
             with st.container(border=True):
                 qr_col, info_col = st.columns([1, 3])
@@ -674,7 +984,10 @@ def render_history_tab() -> None:
                     if "_cf_index_qr" not in st.session_state:
                         try:
                             from src.share_server import generate_qr_code
-                            st.session_state["_cf_index_qr"] = generate_qr_code(root_url)
+
+                            st.session_state["_cf_index_qr"] = generate_qr_code(
+                                root_url
+                            )
                         except Exception:
                             st.session_state["_cf_index_qr"] = None
                     qr_bytes = st.session_state.get("_cf_index_qr")
@@ -688,133 +1001,17 @@ def render_history_tab() -> None:
 
         videos = db.get_recent_videos(limit=50)
         if search.strip():
-            videos = [v for v in videos if search.lower() in (v.get("title") or "").lower()]
+            videos = [
+                v for v in videos if search.lower() in (v.get("title") or "").lower()
+            ]
 
         if not videos:
             st.info("暂无处理记录")
             return
 
-        stage_names = {
-            "extracted": "视频信息提取",
-            "transcribed": "字幕/转录",
-            "translated": "翻译",
-            "annotated": "生词标注",
-        }
-
-        for video in videos:
-            vid = video["id"]
-            pstage = video.get("pipeline_stage", "")
-            is_incomplete = bool(pstage) and pstage != "completed"
-            html_fn = db.get_html_filename(vid) or f"{video.get('video_id', '')}.html"
-            html_path = OUTPUT_DIR / html_fn
-            cf_url = _get_cloudflare_url(html_fn) if html_path.exists() else ""
-            extras = db.get_video_extras(vid)
-            has_summary = bool(extras.get("video_summary"))
-            has_classic = bool(extras.get("classic_sentences"))
-
-            with st.container(border=True):
-                # Row 1: title + edit / delete icon buttons
-                title_col, edit_col, del_col = st.columns([8, 1, 1])
-                with title_col:
-                    st.markdown(f"**{video.get('title', '未知标题')}**")
-                with edit_col:
-                    if st.button("✏️", key=f"edit_{vid}", use_container_width=True, help="编辑标题 / 链接"):
-                        edit_video_dialog(db, video)
-                with del_col:
-                    if st.button("🗑️", key=f"del_{vid}", use_container_width=True, help="删除"):
-                        confirm_delete_dialog(db, vid, video.get("title", "未知标题"))
-
-                # Row 2: single-line metadata + inline source link
-                duration_s = video.get("duration_seconds", 0)
-                m, s = divmod(int(duration_s or 0), 60)
-                h, m = divmod(m, 60)
-                dur_str = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
-                meta_parts = [
-                    video.get("author") or "未知作者",
-                    dur_str,
-                    video.get("platform") or "未知",
-                    (video.get("updated_at") or "")[:10],
-                ]
-                if is_incomplete:
-                    meta_parts.append(f"⏸ {stage_names.get(pstage, pstage)}")
-                video_url = video.get("url", "")
-                if video_url and video_url.startswith("http"):
-                    meta_parts.append(f"[原视频 ↗]({video_url})")
-                st.caption(" · ".join(meta_parts))
-
-                # Row 3: extras status (only if anything extracted)
-                if has_summary or has_classic:
-                    extra_parts = []
-                    if has_summary:
-                        extra_parts.append("简介")
-                    if has_classic:
-                        extra_parts.append(f"{len(extras['classic_sentences'])}句经典句子")
-                    st.caption(f"已提取: {' · '.join(extra_parts)}")
-
-                # Row 4: single-row action bar (5 buttons, emoji + 2-char label)
-                a1, a2, a3, a4, a5 = st.columns(5)
-                with a1:
-                    if html_path.exists():
-                        st.link_button("📄 查看", f"/output/{html_fn}", use_container_width=True)
-                    else:
-                        st.button("📄 查看", key=f"noview_{vid}", use_container_width=True, disabled=True)
-                with a2:
-                    if cf_url:
-                        st.link_button("🌐 在线", cf_url, use_container_width=True)
-                    else:
-                        st.button("🌐 在线", key=f"noonline_{vid}", use_container_width=True, disabled=True)
-                with a3:
-                    if st.button(
-                        "🔄 重标",
-                        key=f"reannot_{vid}",
-                        use_container_width=True,
-                        help="使用最新词典重新标注短语和词汇，不会重新抽取视频",
-                    ):
-                        n = reannotate_video(video, dict(st.session_state.settings), db=db)
-                        if n is not None:
-                            st.success(f"已重新标注，共 {n} 个短语")
-                            st.rerun()
-                with a4:
-                    if st.button(
-                        "✨ 提取",
-                        key=f"extract_{vid}",
-                        use_container_width=True,
-                        help="提取简介与经典句子，并同步重新标注",
-                    ):
-                        count, _used_llm = regenerate_html_with_extras(video, dict(st.session_state.settings), db=db)
-                        if count > 0:
-                            st.success(f"已提取简介和 {count} 句经典句子")
-                            st.rerun()
-                with a5:
-                    if is_incomplete:
-                        if st.button("▶ 继续", key=f"resume_{vid}", use_container_width=True, help="从断点继续处理"):
-                            db.close()
-                            from src.pipeline import Pipeline
-                            _settings = dict(st.session_state.settings)
-                            _pipeline = Pipeline(settings=_settings)
-                            try:
-                                _pipeline.run(
-                                    video.get("url", ""),
-                                    prefer_subtitles=True,
-                                    progress_callback=lambda s, f, t: None,
-                                )
-                                st.success("处理完成!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"继续处理失败: {e}")
-                            return
-                    else:
-                        if st.button("🚀 发布", key=f"publish_{vid}", use_container_width=True, help="发布到 Cloudflare Pages"):
-                            from src.publish import publish_single
-                            pub_result = publish_single(html_fn)
-                            if pub_result["success"]:
-                                pub_url = pub_result["url"] or _get_cloudflare_url(html_fn) or "https://subtitle-docs.pages.dev"
-                                st.success("已发布到线上")
-                                st.link_button("打开网页", pub_url)
-                                st.code(pub_url, language=None)
-                                st.session_state.pop("_cf_index_qr", None)
-                            else:
-                                st.error(f"发布失败: {pub_result['error']}")
+        for i, video in enumerate(videos, 1):
+            m = _video_meta(db, video)
+            _render_video_card(m, video, db, index=i)
     finally:
         db.close()
 
@@ -846,8 +1043,13 @@ def render_settings_tab() -> None:
         "Whisper模型大小",
         options=list(model_display.keys()),
         format_func=lambda x: model_display.get(x, x),
-        index=list(model_display.keys()).index(settings.get("whisper_model", WHISPER_MODEL_SIZE))
-        if settings.get("whisper_model", WHISPER_MODEL_SIZE) in model_display else 2,
+        index=(
+            list(model_display.keys()).index(
+                settings.get("whisper_model", WHISPER_MODEL_SIZE)
+            )
+            if settings.get("whisper_model", WHISPER_MODEL_SIZE) in model_display
+            else 2
+        ),
     )
 
     settings["use_hf_mirror"] = st.checkbox(
@@ -867,8 +1069,14 @@ def render_settings_tab() -> None:
         "生词难度阈值",
         options=list(threshold_display.keys()),
         format_func=lambda x: threshold_display.get(x, x),
-        index=list(threshold_display.keys()).index(settings.get("difficulty_threshold", CEFR_DIFFICULTY_THRESHOLD))
-        if settings.get("difficulty_threshold", CEFR_DIFFICULTY_THRESHOLD) in threshold_display else 0,
+        index=(
+            list(threshold_display.keys()).index(
+                settings.get("difficulty_threshold", CEFR_DIFFICULTY_THRESHOLD)
+            )
+            if settings.get("difficulty_threshold", CEFR_DIFFICULTY_THRESHOLD)
+            in threshold_display
+            else 0
+        ),
         help="初一上学期对应A1，初一下学期对应A2，建议根据实际水平选择",
     )
 
@@ -880,11 +1088,14 @@ def render_settings_tab() -> None:
     st.markdown("### AI 摘要配置")
     st.caption("配置后提取经典句子和视频简介时使用 LLM，未配置则使用规则评分。")
     from config import LLM_API_KEY, LLM_API_BASE, LLM_MODEL
+
     key_status = "已配置" if LLM_API_KEY else "未配置"
     st.markdown(f"- **API Key:** {key_status}")
     st.markdown(f"- **API Base:** `{LLM_API_BASE}`")
     st.markdown(f"- **模型:** `{LLM_MODEL}`")
-    st.caption("编辑项目根目录 `.env` 文件修改配置（LLM_API_KEY / LLM_API_BASE / LLM_MODEL）")
+    st.caption(
+        "编辑项目根目录 `.env` 文件修改配置（LLM_API_KEY / LLM_API_BASE / LLM_MODEL）"
+    )
 
     st.markdown("### 微信分享 / frp 外网配置")
     st.caption(f"局域网分享无需配置。外网分享需 frp 将本地 {APP_PORT} 端口映射到公网。")
@@ -899,9 +1110,12 @@ def render_settings_tab() -> None:
 
     with st.expander("查看 frpc.toml 配置参考"):
         from src.share_server import generate_frpc_config
+
         config_str = generate_frpc_config(frp_public_url or "http://your-server.com")
         st.code(config_str, language="toml")
-        st.caption(f"将此配置保存为 frpc.toml，运行 `frpc -c frpc.toml` 即可。本地服务端口为 {APP_PORT}。")
+        st.caption(
+            f"将此配置保存为 frpc.toml，运行 `frpc -c frpc.toml` 即可。本地服务端口为 {APP_PORT}。"
+        )
 
 
 def main() -> None:
