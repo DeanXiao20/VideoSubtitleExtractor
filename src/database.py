@@ -1,8 +1,11 @@
 import json
+import logging
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from config import DB_PATH
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -48,7 +51,7 @@ class Database:
             );
             CREATE INDEX IF NOT EXISTS idx_subtitles_video ON subtitles(video_id_fk);
         """)
-        for col in ("video_summary", "classic_sentences_json"):
+        for col in ("video_summary", "classic_sentences_json", "html_filename", "pipeline_stage"):
             try:
                 self.conn.execute(f"ALTER TABLE videos ADD COLUMN {col} TEXT")
             except sqlite3.OperationalError:
@@ -72,6 +75,7 @@ class Database:
                 info.get("platform"), info.get("video_id"), row["id"],
             ))
             self.conn.commit()
+            logger.info(f"Updated video id={row['id']}: {info.get('title', '')[:40]}")
             return row["id"]
 
         cur = self.conn.execute("""
@@ -84,6 +88,7 @@ class Database:
             info.get("duration_seconds"), info.get("thumbnail_url"), now, now,
         ))
         self.conn.commit()
+        logger.info(f"Inserted video id={cur.lastrowid}: {info.get('title', '')[:40]}")
         return cur.lastrowid
 
     def get_video_by_url(self, url: str) -> dict | None:
@@ -198,7 +203,46 @@ class Database:
             result["classic_sentences"] = []
         return result
 
+    def save_html_filename(self, video_id: int, filename: str) -> None:
+        self.conn.execute(
+            "UPDATE videos SET html_filename = ? WHERE id = ?",
+            (filename, video_id),
+        )
+        self.conn.commit()
+
+    def get_html_filename(self, video_id: int) -> str | None:
+        row = self.conn.execute(
+            "SELECT html_filename FROM videos WHERE id = ?", (video_id,)
+        ).fetchone()
+        if row and row["html_filename"]:
+            return row["html_filename"]
+        # Fallback: use video_id column
+        row2 = self.conn.execute(
+            "SELECT video_id FROM videos WHERE id = ?", (video_id,)
+        ).fetchone()
+        if row2 and row2["video_id"]:
+            return f"{row2['video_id']}.html"
+        return None
+
     def close(self) -> None:
         if self._conn:
+            try:
+                self._conn.commit()
+                self._conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except Exception:
+                pass
             self._conn.close()
             self._conn = None
+
+    def save_pipeline_stage(self, video_id: int, stage: str) -> None:
+        self.conn.execute(
+            "UPDATE videos SET pipeline_stage = ? WHERE id = ?",
+            (stage, video_id),
+        )
+        self.conn.commit()
+
+    def get_pipeline_stage(self, video_id: int) -> str:
+        row = self.conn.execute(
+            "SELECT pipeline_stage FROM videos WHERE id = ?", (video_id,)
+        ).fetchone()
+        return row["pipeline_stage"] if row and row["pipeline_stage"] else ""

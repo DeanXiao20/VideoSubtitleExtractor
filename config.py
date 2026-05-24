@@ -40,3 +40,6 @@ LLM_API_BASE = os.getenv("LLM_API_BASE", "https://api.openai.com/v1")
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
 
 MAX_CLASSIC_SENTENCES = int(os.getenv("MAX_CLASSIC_SENTENCES", "20"))
+
+CF_PAGES_PROJECT = os.getenv("CF_PAGES_PROJECT", "")
+GITHUB_PAGES_REPO = os.getenv("GITHUB_PAGES_REPO", "")

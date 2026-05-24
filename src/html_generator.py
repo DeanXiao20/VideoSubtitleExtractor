@@ -793,3 +793,138 @@ def generate_bilingual_html(
         output_path.write_text(full_html, encoding="utf-8")
 
     return full_html
+
+
+_INDEX_CSS = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+    font-family: "Noto Sans SC", "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+    background: #f5f7fa;
+    color: #1a1a1a;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 24px 16px;
+}
+.header {
+    text-align: center;
+    margin-bottom: 24px;
+}
+.header h1 {
+    font-size: 20pt;
+    color: #2c3e50;
+    margin-bottom: 4px;
+}
+.header p {
+    font-size: 10pt;
+    color: #888;
+}
+.video-card {
+    background: #fff;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: box-shadow 0.2s;
+}
+.video-card:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.video-info { flex: 1; min-width: 0; }
+.video-title {
+    font-size: 12pt;
+    font-weight: 600;
+    color: #2c3e50;
+    text-decoration: none;
+    display: block;
+    margin-bottom: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.video-title:hover { color: #3498db; }
+.video-meta {
+    font-size: 8.5pt;
+    color: #888;
+}
+.view-link {
+    display: inline-block;
+    padding: 6px 16px;
+    background: #3498db;
+    color: #fff;
+    border-radius: 4px;
+    text-decoration: none;
+    font-size: 9pt;
+    font-weight: 500;
+    white-space: nowrap;
+    margin-left: 12px;
+}
+.view-link:hover { background: #2980b9; }
+.empty-state {
+    text-align: center;
+    padding: 48px 16px;
+    color: #aaa;
+    font-size: 11pt;
+}
+"""
+
+
+def generate_index_html(videos: list[dict], output_dir: Path | None = None) -> str:
+    """Generate an index page listing all videos with links to their HTML.
+
+    If output_dir is provided, only includes videos whose HTML file exists on disk.
+    """
+    if output_dir:
+        videos = [
+            v for v in videos
+            if (output_dir / (v.get("html_filename") or f"{v.get('video_id', '')}.html")).exists()
+        ]
+    cards: list[str] = []
+    for video in videos:
+        filename = video.get("html_filename") or f"{video.get('video_id', 'output')}.html"
+        title = html.escape(video.get("title") or "未知标题")
+        author = html.escape(video.get("author") or "")
+        duration_s = video.get("duration_seconds", 0)
+        m, s = divmod(int(duration_s or 0), 60)
+        h, m = divmod(m, 60)
+        dur_str = f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+        updated = (video.get("updated_at") or "")[:10]
+
+        meta_parts = []
+        if author:
+            meta_parts.append(author)
+        meta_parts.append(dur_str)
+        if updated:
+            meta_parts.append(updated)
+        meta_str = " | ".join(meta_parts)
+
+        cards.append(f"""
+        <div class="video-card">
+            <div class="video-info">
+                <a class="video-title" href="{html.escape(filename)}">{title}</a>
+                <div class="video-meta">{meta_str}</div>
+            </div>
+            <a class="view-link" href="{html.escape(filename)}">查看</a>
+        </div>
+        """)
+
+    cards_html = "".join(cards) if cards else '<div class="empty-state">暂无字幕文档</div>'
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>双语字幕文档库</title>
+    <style>{_INDEX_CSS}</style>
+</head>
+<body>
+    <div class="header">
+        <h1>双语字幕文档库</h1>
+        <p>共 {len(videos)} 个文档</p>
+    </div>
+    {cards_html}
+</body>
+</html>"""

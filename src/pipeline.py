@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 from dataclasses import dataclass
@@ -11,6 +12,18 @@ from config import (
     CEFR_DIFFICULTY_THRESHOLD,
     HF_MIRROR_URL,
 )
+
+logger = logging.getLogger(__name__)
+
+# Pipeline stage order — used for resume logic
+STAGE_ORDER = ["", "extracted", "transcribed", "translated", "annotated", "completed"]
+
+
+def _stage_index(stage: str) -> int:
+    try:
+        return STAGE_ORDER.index(stage)
+    except ValueError:
+        return 0
 
 
 def _probe_duration(media_path: Path) -> float | None:
@@ -30,8 +43,8 @@ class PipelineResult:
     video_info: dict
     segments: list[dict]
     video_id: int
-    video_summary: str = ""
-    classic_sentences: list[dict] | None = None
+    html_filename: str = ""
+    resumed: bool = False
 
 
 class Pipeline:
@@ -94,19 +107,23 @@ class Pipeline:
             self._db = Database()
         return self._db
 
+    def _close_db(self) -> None:
+        if self._db is not None:
+            self._db.close()
+            self._db = None
+
     def run(
         self,
         url: str,
         force_transcribe: bool = False,
         prefer_subtitles: bool = True,
+        force: bool = False,
         progress_callback: Callable[[str, float, str], None] | None = None,
     ) -> PipelineResult:
         def _progress(stage: str, fraction: float, text: str):
             if progress_callback:
                 progress_callback(stage, fraction, text)
 
-        # Step 1: Extract video info
-        _progress("extract", 0.0, "正在获取视频信息...")
         from src.extractor import (
             get_video_info, download_subtitles, download_audio,
             download_direct_media, is_direct_media_url, parse_subtitle_file,
@@ -114,151 +131,246 @@ class Pipeline:
         )
         from src.annotator import annotate_all_segments
         from src.html_generator import generate_bilingual_html
+        from src.utils import slugify_title
 
-        is_direct = is_direct_media_url(url)
-        if is_direct:
-            vid_id = _url_hash(url)
-            video_info = {
-                "url": url,
-                "platform": "direct",
-                "video_id": vid_id,
-                "title": f"视频 {vid_id}",
-                "author": "",
-                "description": "",
-                "duration_seconds": None,
-                "thumbnail_url": "",
-                "subtitles_available": False,
-                "auto_captions_available": False,
-                "available_subtitle_languages": [],
-            }
-        else:
-            video_info = get_video_info(url, proxy=self.proxy)
-        vid_id = video_info.get("video_id", "tmp")
-        safe_name = _safe_dir_name(vid_id, url)
-        _progress("extract", 1.0, f"视频: {video_info.get('title', '未知')}")
-
-        # Step 2: Get subtitles or transcribe
+        # --- Resume check: load existing progress ---
+        resumed = False
+        vid: int | None = None
+        stage = ""
         segments: list[dict] = []
-        available_langs = video_info.get("available_subtitle_languages", [])
+        video_info: dict = {}
+        html_filename: str = ""
 
-        if prefer_subtitles and not force_transcribe and available_langs:
-            _progress("subtitles", 0.0, "正在下载字幕...")
-            dl_dir = DOWNLOADS_DIR / f"subs_{safe_name}"
-            try:
-                en_available = any(l.startswith("en") for l in available_langs)
-                sub_files = download_subtitles(
-                    url, dl_dir,
-                    languages=["en", "zh-Hans", "zh", "zh-CN"] if not en_available else ["en"],
-                    auto_generated=True,
-                    proxy=self.proxy,
+        if not force:
+            existing = self.db.get_video_by_url(url)
+            if existing:
+                vid = existing["id"]
+                stage = existing.get("pipeline_stage", "")
+                if stage == "completed":
+                    # Already fully processed — load and return
+                    segments = self.db.get_segments(vid)
+                    html_filename = self.db.get_html_filename(vid) or ""
+                    html_path = OUTPUT_DIR / html_filename if html_filename else None
+                    if html_path and html_path.exists():
+                        html_content = html_path.read_text(encoding="utf-8")
+                        self._close_db()
+                        _progress("extract", 1.0, "已完成，直接加载")
+                        _progress("subtitles", 1.0, "已完成")
+                        _progress("translate", 1.0, "已完成")
+                        _progress("annotate", 1.0, "已完成")
+                        _progress("generate", 1.0, "已完成")
+                        _progress("save", 1.0, "已完成")
+                        return PipelineResult(
+                            html=html_content,
+                            video_info=existing,
+                            segments=segments,
+                            video_id=vid,
+                            html_filename=html_filename,
+                            resumed=True,
+                        )
+                if _stage_index(stage) >= _stage_index("transcribed"):
+                    segments = self.db.get_segments(vid)
+                    resumed = True
+                    logger.info(f"Resuming from stage '{stage}' for video id={vid}")
+
+        if force and vid is not None:
+            # Force rerun: clear old segments and stage
+            self.db.save_segments(vid, [])
+            self.db.save_pipeline_stage(vid, "")
+            segments = []
+            stage = ""
+
+        # --- Stage 1: Extract video info ---
+        if _stage_index(stage) < _stage_index("extracted"):
+            _progress("extract", 0.0, "正在获取视频信息...")
+            is_direct = is_direct_media_url(url)
+            if is_direct:
+                vid_id = _url_hash(url)
+                video_info = {
+                    "url": url,
+                    "platform": "direct",
+                    "video_id": vid_id,
+                    "title": f"视频 {vid_id}",
+                    "author": "",
+                    "description": "",
+                    "duration_seconds": None,
+                    "thumbnail_url": "",
+                    "subtitles_available": False,
+                    "auto_captions_available": False,
+                    "available_subtitle_languages": [],
+                }
+            else:
+                video_info = get_video_info(url, proxy=self.proxy)
+            _progress("extract", 1.0, f"视频: {video_info.get('title', '未知')}")
+
+            # Save immediately
+            vid = self.db.save_video(video_info)
+            video_info["id"] = vid
+            html_filename = f"{slugify_title(video_info.get('title', ''), video_info.get('video_id', 'output'))}.html"
+            self.db.save_html_filename(vid, html_filename)
+            self.db.save_pipeline_stage(vid, "extracted")
+            logger.info(f"Stage 1 saved: vid={vid}, stage=extracted")
+        elif not video_info:
+            # Resuming — load video_info from DB
+            video_info = dict(self.db.get_video_by_id(vid) or {})
+            html_filename = self.db.get_html_filename(vid) or ""
+            _progress("extract", 1.0, f"跳过(已完成): {video_info.get('title', '未知')}")
+
+        safe_name = _safe_dir_name(video_info.get("video_id", ""), url)
+
+        # --- Stage 2: Get subtitles or transcribe ---
+        if _stage_index(stage) < _stage_index("transcribed"):
+            available_langs = video_info.get("available_subtitle_languages", [])
+
+            if prefer_subtitles and not force_transcribe and available_langs:
+                _progress("subtitles", 0.0, "正在下载字幕...")
+                dl_dir = DOWNLOADS_DIR / f"subs_{safe_name}"
+                try:
+                    en_available = any(l.startswith("en") for l in available_langs)
+                    sub_files = download_subtitles(
+                        url, dl_dir,
+                        languages=["en", "zh-Hans", "zh", "zh-CN"] if not en_available else ["en"],
+                        auto_generated=True,
+                        proxy=self.proxy,
+                    )
+                    for lang, path in sub_files.items():
+                        if lang.startswith("en"):
+                            segments = parse_subtitle_file(path)
+                            for s in segments:
+                                s["language"] = "en"
+                            break
+                        elif lang.startswith("zh"):
+                            segments = parse_subtitle_file(path)
+                            for s in segments:
+                                s["language"] = "zh"
+                            break
+
+                    if not segments and sub_files:
+                        first_path = next(iter(sub_files.values()))
+                        segments = parse_subtitle_file(first_path)
+                        for s in segments:
+                            s["language"] = "unknown"
+
+                    _progress("subtitles", 1.0, f"已提取 {len(segments)} 条字幕")
+                except Exception as e:
+                    _progress("subtitles", 0.5, f"字幕下载失败: {e}，尝试转录...")
+                    segments = []
+
+            if not segments:
+                _progress("transcribe", 0.0, "正在下载音频...")
+                audio_dir = DOWNLOADS_DIR / f"audio_{safe_name}"
+                try:
+                    if is_direct_media_url(url):
+                        _progress("transcribe", 0.05, "检测到直接视频链接，正在下载...")
+                        audio_path = download_direct_media(url, audio_dir, proxy=self.proxy)
+                    else:
+                        audio_path = download_audio(url, audio_dir, proxy=self.proxy)
+                except Exception as e:
+                    from src.extractor import NetworkError
+                    raise NetworkError(f"音频下载失败: {e}")
+
+                if video_info.get("duration_seconds") is None:
+                    dur = _probe_duration(audio_path)
+                    if dur:
+                        video_info["duration_seconds"] = int(dur)
+                        self.db.save_video(video_info)
+
+                _progress("transcribe", 0.2, "正在转录音频（可能需要几分钟）...")
+                segments = self.transcriber.transcribe_to_dicts(
+                    audio_path,
+                    language=None,
+                    progress_callback=lambda f, t: _progress("transcribe", 0.2 + f * 0.8, t),
                 )
-                for lang, path in sub_files.items():
-                    if lang.startswith("en"):
-                        segments = parse_subtitle_file(path)
-                        for s in segments:
-                            s["language"] = "en"
+                detected_lang = "en"
+                for s in segments:
+                    text = s.get("text_original", "")
+                    if text and any('一' <= c <= '鿿' for c in text):
+                        detected_lang = "zh"
                         break
-                    elif lang.startswith("zh"):
-                        segments = parse_subtitle_file(path)
-                        for s in segments:
-                            s["language"] = "zh"
-                        break
+                for s in segments:
+                    s["language"] = detected_lang
+                _progress("transcribe", 1.0, f"转录完成: {len(segments)} 条")
 
-                if not segments and sub_files:
-                    first_path = next(iter(sub_files.values()))
-                    segments = parse_subtitle_file(first_path)
-                    for s in segments:
-                        s["language"] = "unknown"
+            if not segments:
+                raise ValueError("未能获取任何字幕或转录内容")
 
-                _progress("subtitles", 1.0, f"已提取 {len(segments)} 条字幕")
-            except Exception as e:
-                _progress("subtitles", 0.5, f"字幕下载失败: {e}，尝试转录...")
-                segments = []
-
-        if not segments:
-            _progress("transcribe", 0.0, "正在下载音频...")
-            audio_dir = DOWNLOADS_DIR / f"audio_{safe_name}"
-            try:
-                if is_direct_media_url(url):
-                    _progress("transcribe", 0.05, "检测到直接视频链接，正在下载...")
-                    audio_path = download_direct_media(url, audio_dir, proxy=self.proxy)
-                else:
-                    audio_path = download_audio(url, audio_dir, proxy=self.proxy)
-            except Exception as e:
-                from src.extractor import NetworkError
-                raise NetworkError(f"音频下载失败: {e}")
-
-            if video_info.get("duration_seconds") is None:
-                dur = _probe_duration(audio_path)
-                if dur:
-                    video_info["duration_seconds"] = int(dur)
-
-            _progress("transcribe", 0.2, "正在转录音频（可能需要几分钟）...")
-            segments = self.transcriber.transcribe_to_dicts(
-                audio_path,
-                language=None,
-                progress_callback=lambda f, t: _progress("transcribe", 0.2 + f * 0.8, t),
-            )
-            # Detect language from first segment
-            detected_lang = "en"
-            for s in segments:
-                text = s.get("text_original", "")
-                if text and any('一' <= c <= '鿿' for c in text):
-                    detected_lang = "zh"
-                    break
-            for s in segments:
-                s["language"] = detected_lang
-            _progress("transcribe", 1.0, f"转录完成: {len(segments)} 条")
-
-        if not segments:
-            raise ValueError("未能获取任何字幕或转录内容")
-
-        # Step 3: Translate
-        _progress("translate", 0.0, "正在翻译...")
-        src_lang = segments[0].get("language", "en") if segments else "en"
-        if src_lang.startswith("zh"):
-            from src.translator import Translator as _T
-            zh_translator = _T(source_lang="zh-CN", target_lang="en", proxy=self.proxy_dict)
-            texts_to_translate = [s.get("text_original", "") for s in segments]
-            translations = zh_translator.translate_batch(
-                texts_to_translate,
-                progress_callback=lambda f, t: _progress("translate", f, t),
-            )
-            for i, seg in enumerate(segments):
-                # For Chinese source: put Chinese as original, English as translated
-                seg["text_translated"] = translations[i] if i < len(translations) else ""
-                seg["language"] = "zh"
+            # Save segments after transcription
+            self.db.save_segments(vid, segments)
+            self.db.save_pipeline_stage(vid, "transcribed")
+            logger.info(f"Stage 2 saved: vid={vid}, stage=transcribed, {len(segments)} segments")
         else:
-            texts_to_translate = [s.get("text_original", "") for s in segments]
-            translations = self.translator.translate_batch(
-                texts_to_translate,
-                progress_callback=lambda f, t: _progress("translate", f, t),
+            _progress("subtitles", 1.0, "跳过(已完成)")
+            _progress("transcribe", 1.0, f"跳过(已完成): {len(segments)} 条字幕")
+
+        # --- Stage 3: Translate ---
+        if _stage_index(stage) < _stage_index("translated"):
+            _progress("translate", 0.0, "正在翻译...")
+            src_lang = segments[0].get("language", "en") if segments else "en"
+            if src_lang.startswith("zh"):
+                from src.translator import Translator as _T
+                zh_translator = _T(source_lang="zh-CN", target_lang="en", proxy=self.proxy_dict)
+                texts_to_translate = [s.get("text_original", "") for s in segments]
+                translations = zh_translator.translate_batch(
+                    texts_to_translate,
+                    progress_callback=lambda f, t: _progress("translate", f, t),
+                )
+                for i, seg in enumerate(segments):
+                    seg["text_translated"] = translations[i] if i < len(translations) else ""
+                    seg["language"] = "zh"
+            else:
+                texts_to_translate = [s.get("text_original", "") for s in segments]
+                translations = self.translator.translate_batch(
+                    texts_to_translate,
+                    progress_callback=lambda f, t: _progress("translate", f, t),
+                )
+                for i, seg in enumerate(segments):
+                    seg["text_translated"] = translations[i] if i < len(translations) else ""
+            _progress("translate", 1.0, "翻译完成")
+
+            # Save segments after translation
+            self.db.save_segments(vid, segments)
+            self.db.save_pipeline_stage(vid, "translated")
+            logger.info(f"Stage 3 saved: vid={vid}, stage=translated")
+        else:
+            _progress("translate", 1.0, "跳过(已完成)")
+
+        # --- Stage 4: Annotate difficult words ---
+        if _stage_index(stage) < _stage_index("annotated"):
+            _progress("annotate", 0.0, "正在标注生词...")
+            segments = annotate_all_segments(
+                segments,
+                self.cefr_lookup,
+                self.translator,
+                threshold=self.difficulty_threshold,
+                progress_callback=lambda f, t: _progress("annotate", f, t),
             )
-            for i, seg in enumerate(segments):
-                seg["text_translated"] = translations[i] if i < len(translations) else ""
-        _progress("translate", 1.0, "翻译完成")
+            _progress("annotate", 1.0, "标注完成")
 
-        # Step 4: Annotate difficult words
-        _progress("annotate", 0.0, "正在标注生词...")
-        segments = annotate_all_segments(
-            segments,
-            self.cefr_lookup,
-            self.translator,
-            threshold=self.difficulty_threshold,
-            progress_callback=lambda f, t: _progress("annotate", f, t),
-        )
-        _progress("annotate", 1.0, "标注完成")
+            # Save segments after annotation
+            self.db.save_segments(vid, segments)
+            self.db.save_pipeline_stage(vid, "annotated")
+            logger.info(f"Stage 4 saved: vid={vid}, stage=annotated")
+        else:
+            _progress("annotate", 1.0, "跳过(已完成)")
 
-        # Step 5: Generate HTML
-        _progress("generate", 0.0, "正在生成HTML...")
-        output_path = OUTPUT_DIR / f"{video_info.get('video_id', 'output')}.html"
-        html_content = generate_bilingual_html(video_info, segments, output_path)
-        _progress("generate", 1.0, "HTML生成完成")
+        # --- Stage 5: Generate HTML ---
+        if not html_filename:
+            html_filename = f"{slugify_title(video_info.get('title', ''), video_info.get('video_id', 'output'))}.html"
+        output_path = OUTPUT_DIR / html_filename
 
-        # Step 6: Save to database
+        if not output_path.exists():
+            _progress("generate", 0.0, "正在生成HTML...")
+            html_content = generate_bilingual_html(video_info, segments, output_path)
+            _progress("generate", 1.0, "HTML生成完成")
+        else:
+            html_content = output_path.read_text(encoding="utf-8")
+            _progress("generate", 1.0, "跳过(HTML已存在)")
+
+        # --- Stage 6: Finalize ---
         _progress("save", 0.0, "正在保存...")
-        vid = self.db.save_video(video_info)
-        self.db.save_segments(vid, segments)
+        self.db.save_html_filename(vid, html_filename)
+        self.db.save_pipeline_stage(vid, "completed")
+        self._close_db()
         _progress("save", 1.0, "保存完成")
 
         # Cleanup downloads
@@ -276,4 +388,6 @@ class Pipeline:
             video_info=video_info,
             segments=segments,
             video_id=vid,
+            html_filename=html_filename,
+            resumed=resumed,
         )

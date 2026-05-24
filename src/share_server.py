@@ -54,13 +54,20 @@ def _ensure_firewall_rule() -> None:
         pass
 
 
-def _get_video_edits(video_id_str: str) -> dict | None:
+def _get_video_edits(html_filename: str) -> dict | None:
     try:
         from src.database import Database
         db = Database()
+        # Try html_filename first, then fall back to video_id
         row = db.conn.execute(
-            "SELECT title, url FROM videos WHERE video_id = ?", (video_id_str,)
+            "SELECT title, url FROM videos WHERE html_filename = ?", (html_filename,)
         ).fetchone()
+        if not row:
+            # Fallback: strip .html and search by video_id (backward compat)
+            vid_str = html_filename.replace(".html", "")
+            row = db.conn.execute(
+                "SELECT title, url FROM videos WHERE video_id = ?", (vid_str,)
+            ).fetchone()
         db.close()
         if not row:
             return None
@@ -93,10 +100,13 @@ class _UnifiedHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
+        from urllib.parse import unquote
         parsed = urlparse(self.path)
-        path = parsed.path
+        path = unquote(parsed.path).rstrip("/")
 
-        if path.startswith("/output/"):
+        if path == "/output" or path == "/output/":
+            self._serve_index()
+        elif path.startswith("/output/"):
             self._serve_static(path)
         elif self._is_websocket_upgrade():
             self._proxy_websocket()
@@ -134,8 +144,7 @@ class _UnifiedHandler(BaseHTTPRequestHandler):
         html_str = content.decode("utf-8")
 
         # Apply latest edits from database
-        video_id_str = safe_name.replace(".html", "")
-        updated = _get_video_edits(video_id_str)
+        updated = _get_video_edits(safe_name)
         if updated:
             import re
             import html as html_mod
@@ -171,6 +180,24 @@ class _UnifiedHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(content)
+
+    def _serve_index(self) -> None:
+        try:
+            from src.database import Database
+            from src.html_generator import generate_index_html
+            db = Database()
+            videos = db.get_recent_videos(limit=200)
+            db.close()
+            content = generate_index_html(videos).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(content)
+        except Exception:
+            self.send_response(500)
+            self.end_headers()
 
     def _proxy_websocket(self) -> None:
         """Raw TCP tunnel for WebSocket connections."""
